@@ -1,0 +1,522 @@
+<html lang="zh">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport"
+			content="width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=no" />
+		<script type="text/javascript" src="./rtc/adapter-latest.js"></script>
+		<script type="text/javascript" src='./js/uni.webview.js'></script>
+		<script type="text/javascript" src='./js/utils.js'></script>
+		<script type="text/javascript" src='./js/jsonly.js'></script>
+		<script type="text/javascript" src='./js/trtc.js'></script>
+		<script type="text/javascript" src='./js/vue.js'></script>
+		<style>
+			body {
+				padding: 0;
+				margin: 0;
+				background-image: url('image/wallpaper.png');
+				background-size: contain;
+			}
+
+			.webrtc-box {
+				background: #666;
+				border-radius: 6px;
+				width: 100%;
+				box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+			}
+
+			.localvideo {
+				width: 100vw;
+				height: 100vh;
+				object-fit: cover;
+			}
+
+			.remotevideo {
+				height: 160px;
+				width: 100px;
+				position: fixed;
+				top: 40px;
+				right: 15px;
+				z-index: 10;
+				object-fit: cover;
+			}
+
+			.call-user-box {
+				position: fixed;
+				bottom: 20px;
+				width: 100%;
+			}
+
+			.call-user {
+				display: flex;
+				justify-content: center;
+				align-items: center;
+				flex-direction: column;
+				margin-bottom: 50px;
+			}
+
+			.call-user .avatar {
+				width: 60px;
+				height: 60px;
+				object-fit: contain;
+				border-radius: 50%;
+				overflow: hidden;
+			}
+
+			.call-user .text {
+				font-size: 16px;
+				margin-top: 15px;
+				color: #f6f6f6
+			}
+
+			.call-time {
+				color: #f6f6f6;
+				font-size: 24px;
+				text-align: center;
+			}
+
+			.calling-button {
+				display: flex;
+				justify-content: space-around;
+				padding: 20px;
+			}
+
+			.calling-button .button {
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+			}
+
+			.calling-button .button .image {
+				width: 60px;
+				height: 60px;
+				margin-bottom: 10px;
+			}
+
+			.calling-button .button .text {
+				color: #f6f6f6;
+			}
+
+			.calling-button .switch-btn .text {
+				font-size: 12px !important;
+			}
+
+			.calling-button .button .image-icon {
+				width: 40px;
+				height: 40px;
+				margin-bottom: 10px;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="app">
+			<div class="webrtc-box">
+				<audio id="music1">
+					<source src="./voice/calling.mp3">
+				</audio>
+				<div v-show="is_video" class="localvideo" ref="localvideo" id="localvideo" x5-video-player-fullscreen="true"
+					autoplay x5-playsinline playsinline webkit-playsinline @click="displayBtn = !displayBtn"
+					poster="./image/wallpaper.png"></div>
+				<div v-show="is_video" class="remotevideo" ref="remotevideo" id="remotevideo" x5-video-player-fullscreen="true"
+					autoplay x5-playsinline playsinline webkit-playsinline @click="changeVideo()" poster="./image/wallpaper.png">
+				</div>
+				<div class="call-user-box" v-if="displayBtn">
+					<div class="call-user" v-if="contact">
+						<img class="avatar" v-if="status!=2 || !is_video" :src="contact.avatar" alt="">
+						<div class="text">
+							<b v-if="!is_video && status==2">{{contact.displayName}}</b>
+							<span v-if="status!=2">
+								<span v-if="status==3"> {{contact.displayName}} 正在请求与您{{is_video ? '视频' : '语音'}}通话</span>
+								<span v-else>您正对 <b>{{contact.displayName}}</b> 发起{{is_video ? '视频' : '语音'}}通话</span>
+							</span>
+
+						</div>
+					</div>
+					<div class="call-time" v-if="callTime && status==2">
+						{{setCallTime()}}
+					</div>
+					<div class="calling-button">
+						<div class="button switch-btn" v-if="status<3">
+							<img class="image-icon" :src="'./image/voice'+(voiceStatus ? '' : '-off')+'.png'"
+								@click="switchVoice()" />
+							<div class="text">{{ voiceStatus ? '关闭' : '开启'}}麦克风</div>
+						</div>
+						<div class="button" v-if="status!=0">
+							<img class="image" src="./image/guaduan.png" @click="hangup(true)" />
+							<div class="text">挂断</div>
+						</div>
+						<div class="button" v-if="status==3">
+							<img class="image" src="./image/jieting.png" @click="answer()" />
+							<div class="text">接听</div>
+						</div>
+						<div class="button switch-btn" v-if="status<3">
+							<template v-if="is_video">
+								<img class="image-icon" :src="'./image/video.png'" @click="exchangeVideo()" />
+								<div class="text">切换摄像头</div>
+							</template>
+							<template v-else>
+								<img class="image-icon" :src="'./image/speaker'+(speaker ? '' : '-off')+'.png'" @click="speakBtn()" />
+								<div class="text">{{ speaker ? '关闭' : '开启'}}扬声器</div>
+							</template>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<script>
+			const params = parseUrl(window.location.href);
+			const Counter = {
+				data() {
+					return {
+						displayBtn: true,
+						platform: params.platform,
+						status: 0, //状态0，默认，1：拨号中，2通话中，3来电中，4忙线
+						pc: null, //pc实力化
+						localVideo: "", //本地视频的DOM
+						remoteVideo: "", //远程视频的DOM
+						remoteStream: null, // 远端视频流
+						localStream: null, // 本地视频流
+						is_video: 0, //是否为视频通话
+						videoStatus: true, //视频开启状态
+						voiceStatus: true, //语音开启状态
+						cutdown: 40, //拨号超时
+						timer: null, //计时器
+						offerParams: {},
+						plus: null,
+						streamType: 1, //视频通话展示方式
+						facingMode: 'user', //前置摄像头还是后置摄像头 user-前置 environment-后置
+						headset: true, //麦克风 打开true 关闭false,
+						senders: null, // 数据流
+						speaker: true, // 听筒 false 扬声器true
+						callTime: 0, //通话时间
+						callTimeDis: '', //通话时间展示
+						timerIntervalId: null, //通话计时器
+						contact: {
+							id: params.target_id,
+							displayName: params.name,
+							avatar: params.avatar
+						},
+						trtc: null, //trtc实例
+					};
+				},
+				mounted() {
+					this.trtc = TRTC.create();
+					this.trtc.on(TRTC.EVENT.REMOTE_VIDEO_AVAILABLE, ({
+						userId,
+						streamType
+					}) => {
+						// 您需在 DOM 中提前放置视频容器，建议以 `${userId}_${streamType}` 作为 element id。
+						this.trtc.startRemoteVideo({
+							userId,
+							streamType,
+							view: `remotevideo`
+						});
+					})
+					if (this.platform === 'app') {
+						document.addEventListener('plusready', () => {
+							console.log('设置扬声器')
+							this.plus = plus.audio.createPlayer();
+							this.plus.setRoute(plus.audio.ROUTE_SPEAKER);
+						});
+					}
+					window.addEventListener('message', (e) => {
+						this.callMessagecallback(e)
+					}, false);
+
+					window.getUniAppMessage = (arg) => {
+						const data = {
+							data: jsonly(arg)
+						}
+						this.callMessagecallback(data)
+					}
+					this.is_video = params.type == 1 ? true : false;
+					this.status = params.status
+					// 如果状态为1,表示拨打电话，并且calling状态为1的时候才是直接拨打；
+					if (this.status == 1) {
+						if (params.calling == 1) {
+							this.called(this.is_video)
+						}
+					} else {
+						this.playMusicCall('state');
+					}
+				},
+				watch: {
+					streamType(val) {
+						// 切换镜头位置
+						// if(val==1){
+						// 	this.localVideo.srcObject = this.localStream;
+						// 	this.remoteVideo.srcObject = this.remoteStream;
+						// 	this.localVideo.muted=true;
+						// 	this.remoteVideo.muted=false;
+						// }else{
+						// 	this.localVideo.srcObject = this.remoteStream;
+						// 	this.remoteVideo.srcObject = this.localStream;
+						// 	this.localVideo.muted=false;
+						// 	this.remoteVideo.muted=true;
+						// }
+					}
+				},
+				methods: {
+					// 开始通话计时
+					startTime() {
+						this.timerIntervalId = setInterval(() => {
+							this.callTime++
+						}, 1000)
+					},
+					// 设置通话时间
+					setCallTime() {
+						let time = this.callTime;
+						const hours = Math.floor(time / 3600);
+						const minutes = Math.floor((time - (hours * 3600)) / 60);
+						const seconds = time - (hours * 3600) - (minutes * 60);
+						return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+					},
+					// 视频电话初始化本地视频
+					initLocalStream(call_id, is_video) {
+						if (call_id) {
+							this.postMsg({
+								event: 'calling',
+								status: 3,
+								code: 901
+							});
+							// 计时器，如果一段时间没有接听则自动挂断
+							this.timer = setInterval(() => {
+								this.cutdown--;
+								if (this.cutdown == 0) {
+									this.hangup(true);
+								}
+							}, 1000)
+						} else {
+							// 告诉对方已经接听电话
+							this.postMsg({
+								event: 'acceptRtc',
+								code: 904
+							});
+						}
+					},
+					// 拨打电话
+					called(is_video) {
+						this.is_video = is_video;
+						this.initLocalStream(true, is_video);
+						this.playMusicCall('state');
+					},
+					// 接听电话
+					answer() {
+						this.status = 2;
+						this.initLocalStream(false, this.is_video);
+						this.playMusicCall('close');
+						this.startTime();
+					},
+					// 挂断电话
+					hangup(btn) {
+						clearInterval(this.timer);
+						clearInterval(this.timerIntervalId);
+						if (this.status != 2) {
+							this.playMusicCall('close');
+						}
+						if (this.status) {
+							this.closeLocalMedia(); //关闭本地媒体
+						}
+						// 通话取消
+						let code = 902;
+						// 通话中挂断
+						if (this.status == 2) {
+							code = 906
+							// 拒绝挂断
+						} else if (this.status == 3) {
+							code = 903
+							//对方忙线中
+						} else if (this.status == 4) {
+							code = 907
+						}
+						this.postMsg({
+							event: 'hangup',
+							isbtn: btn,
+							callTime: this.callTime,
+							code: code
+						})
+					},
+					// 关闭本地媒体
+					async closeLocalMedia() {
+						await this.trtc.exitRoom();
+						this.trtc.destroy();
+					},
+					// 打开或关闭声音
+					async switchVoice() {
+						await this.trtc.muteRemoteAudio('*', this.voiceStatus);
+						this.voiceStatus = !this.voiceStatus;
+					},
+					// 临时开、关视频
+					async switchVideo() {
+						if (this.videoStatus) {
+							await this.trtc.stopLocalVideo();
+							this.videoStatus = false;
+						} else {
+							const cameraList = await TRTC.getCameraList();
+							await this.trtc.startLocalVideo({
+								view: document.getElementById('localvideo'),
+								option: {
+									mirror: 'view'
+								}
+							});
+							await this.trtc.muteRemoteAudio('*', false);
+							this.videoStatus = true;
+						}
+					},
+					// 切换前后摄像头
+					async exchangeVideo() {
+						const cameraList = await TRTC.getCameraList();
+						if (this.facingMode === 'user') {
+							if (cameraList[1]) {
+								await this.trtc.updateLocalVideo({
+									option: {
+										cameraId: cameraList[1].deviceId,
+										mirror: false
+									}
+								});
+								this.facingMode = 'environment';
+							}
+						} else {
+							if (cameraList[0]) {
+								await this.trtc.updateLocalVideo({
+									option: {
+										cameraId: cameraList[0].deviceId,
+										mirror: 'view'
+									}
+								});
+								this.facingMode = 'user';
+							}
+						}
+					},
+					// 播放响铃
+					playMusicCall(type) {
+						var audio = document.getElementById("music1");
+						if (type == 'close' && !audio.paused) {
+							audio.pause(); // 暂停
+							return;
+						}
+						if (type === "state") {
+							audio.loop = true;
+						} else {
+							audio.loop = false;
+						}
+
+						if (audio.paused) {
+							audio.play(); // 播放
+						} else {
+							audio.pause(); // 暂停
+						}
+					},
+					// 向uniapp发送消息，页面通讯
+					postMsg(data) {
+						if (this.platform === 'app') {
+							uni.postMessage({
+								data: data
+							})
+						} else {
+							window.parent.postMessage(data)
+						}
+					},
+					// 接收websocket发送过来的消息,由uniapp接收后传输到当前页面
+					callMessagecallback(msg) {
+						let e = msg.data;
+						switch (e.event) {
+							case "calling":
+								console.log('发起通话...');
+								this.called(this.is_video);
+								break;
+							case "hangup":
+								this.hangup(false);
+								break;
+							case "busy":
+								this.status = 4;
+								this.hangup(false);
+								break;
+							case "acceptRtc": //已经接听，创建offer并发送
+								this.status = 2;
+								clearInterval(this.timer);
+								this.startTime();
+								this.playMusicCall();
+								this.createOffer();
+								break;
+							case "turndown":
+								break;
+							case "answer":
+								break;
+							case "iceCandidate":
+								break;
+							case "offer":
+								this.createAnswer();
+								break;
+						}
+					},
+					// 创建offer-sdp
+					createOffer() {
+						this.postMsg({
+							event: 'offer',
+							sdp: ''
+						}, '*');
+						this.onicecandidate();
+					},
+					// 创建应答sdp
+					createAnswer() {
+						this.postMsg({
+							event: 'answer',
+							sdp: ''
+						}, '*');
+						this.onicecandidate();
+					},
+					async onicecandidate() {
+						this.postMsg({
+							event: 'iceCandidate',
+							iceCandidate: ''
+						}, '*');
+						await this.trtc.enterRoom({
+							strRoomId: params.msg_id,
+							sdkAppId: parseInt(params.trtc_appid),
+							userId: params.id,
+							userSig: params.user_sig
+						});
+						if (this.is_video) {
+							await this.trtc.startLocalVideo({
+								view: document.getElementById('localvideo'),
+								option: {
+									mirror: 'view'
+								}
+							});
+							await this.trtc.startLocalAudio();
+						} else {
+							await this.trtc.startLocalAudio();
+						}
+					},
+					//切换视频显示位置
+					changeVideo() {
+						this.streamType == 1 ? this.streamType = 2 : this.streamType = 1;
+					},
+					//打开关闭扬声器 h5端就是静音 ROUTE_EARPIECE 听筒 ROUTE_SPEAKER 扬声器
+					async speakBtn() {
+						let isMuted = false;
+						let speaker = plus.audio.ROUTE_SPEAKER;
+						await this.trtc.muteRemoteAudio('*', true);
+						if (this.speaker) { //扬声器 => 听筒    
+							isMuted = true;
+							speaker = plus.audio.ROUTE_EARPIECE
+						}
+						if (this.platform === 'h5') {
+							await this.trtc.muteRemoteAudio('*', isMuted);
+						}
+						if (this.platform === 'app') {
+							this.plus.setRoute(speaker);
+							await this.trtc.muteRemoteAudio('*', false);
+						}
+						this.speaker = !this.speaker
+					}
+				}
+			}
+
+			const app = Vue.createApp(Counter);
+			app.mount('#app');
+		</script>
+	</body>
+</html>
